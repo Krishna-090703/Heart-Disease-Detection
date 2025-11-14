@@ -1,0 +1,502 @@
+---
+title: "Heart-disease prediction"
+format: html
+author: "Krishna"
+---
+
+# Heart-disease prediction
+
+## Importing & Exploring the dataset
+
+```{python}
+import pandas as pd
+
+data = pd.read_csv("D:\Projects\ML\heart_disease_uci.csv")
+
+data.head()
+```
+
+```{python}
+data.set_index('id', inplace=True)
+
+data.head()
+```
+
+### Dataset Description
+
+- id (Unique id for each patient)
+- age (Age of the patient in years)
+- origin (place of study)
+- sex (Male/Female)
+- cp chest pain type ([typical angina, atypical angina,  non-anginal, asymptomatic])
+- trestbps resting blood pressure (resting blood pressure (in mm Hg on admission to the hospital))
+- chol (serum cholesterol in mg/dl)
+- fbs (if fasting blood sugar > 120 mg/dl)
+- restecg (resting electrocardiographic results)
+- Values: [normal, stt abnormality, lv hypertrophy]
+- thalach: maximum heart rate achieved
+- exang: exercise-induced angina (True/ False)
+- oldpeak: ST depression induced by exercise relative to rest
+- slope: the slope of the peak exercise ST segment
+- ca: number of major vessels (0-3) colored by fluoroscopy
+- thal: [normal; fixed defect; reversible defect]
+- num: the predicted attribute
+
+
+
+```{python}
+data.info()
+```
+
+
+```{python}
+data.isnull().sum()
+```
+
+There are missing values we may handle them while training the model
+
+
+### Lets observe the target variable
+```{python}
+data['num'].value_counts()
+```
+
+The target is multi-class , 0 - No heart disease , 1 - 4 heart disease based on severity
+
+### Converting target variable into binary class
+
+```{python}
+df = data.copy() # Copying to ensure we dont lose the original dataset
+
+df['target'] = df['num'].apply(lambda x:0 if x==0 else 1) #0 - no disease , 1 - disease
+
+df.drop(columns = 'num', inplace = True)
+
+df.head()
+```
+
+### Target variable distribution
+```{python}
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+import warnings
+warnings.filterwarnings("ignore")
+
+sns.countplot(x = 'target', data = df, palette = 'Set2')
+plt.xlabel('Disease')
+plt.ylabel('Frequency')
+plt.title('Disease Distribution')
+plt.show()
+```
+
+The data shows a relatively balanced, though unequal, distribution between the two disease categories. The existence of disease is more frequent, occurring 500 times approx compared to approximately 400 times (approx) for no disease. 
+
+
+## Splitting the data
+
+```{python}
+from sklearn.model_selection import train_test_split
+
+X = df.drop(['target','dataset'], axis = 1)
+y = df['target']
+
+print(X.shape, y.shape)
+```
+
+Dropping the dataset column as it is irrelevant
+
+
+```{python}
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.2, random_state = 42, stratify = y)
+
+print(X_train.shape, X_test.shape, y_train.shape, y_test.shape)
+```
+
+## Creating the Pipeline
+
+
+```{python}
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
+
+
+# Identify numeric and categorical columns
+num_cols = X.select_dtypes(include=["int64", "float64"]).columns
+cat_cols = X.select_dtypes(exclude=["int64", "float64"]).columns
+
+```
+
+### Transformers
+
+```{python}
+num_transformer = Pipeline(steps=[
+    ('impute', SimpleImputer(strategy='median'))
+])
+
+# Scaling of features not required as it is a tree-based model 
+
+# Categorical Transformer
+
+cat_transformer = Pipeline(steps=[
+    ('impute', SimpleImputer(strategy='most_frequent')),
+    ('encoder', OneHotEncoder(handle_unknown='ignore'))
+])
+
+
+# Column Transformer
+preprocessor = ColumnTransformer(
+    transformers=[
+        ('num', num_transformer, num_cols),
+        ('cat', cat_transformer, cat_cols)
+    ]
+)
+
+preprocessor
+```
+
+### Pipeline
+
+```{python}
+rf_pipeline = Pipeline(steps=[
+    ('preprocessor', preprocessor),
+    ('model', RandomForestClassifier(random_state = 42))
+])
+
+rf_pipeline
+```
+
+### Fitting the model
+
+```{python}
+rf_pipeline.fit(X_train, y_train)
+```
+
+## Evaluating the model
+
+```{python}
+from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
+
+y_pred = rf_pipeline.predict(X_test)
+
+clf_report = pd.DataFrame(classification_report(y_test, y_pred, output_dict=True))
+
+accuracy = accuracy_score(y_test, y_pred)
+
+confusion = confusion_matrix(y_test, y_pred)
+
+print('Test Results')
+print('='*50)
+print(f"Accuracy Score: {accuracy * 100:.2f}%")
+print("_"*50)
+print(f"CLASSIFICATION REPORT:\n{clf_report}")
+print("_"*50)
+print(f"Confusion Matrix: \n {confusion}\n")
+```
+
+- Accuracy = 84.78% . It is a Good performance for a healthcare dataset.
+- The model predicts "disease", ~85% of the time it’s correct.
+- It caught 88% of patients with heart disease and 80% of healthy patients
+
+### Train Results
+
+```{python}
+y_pred_train = rf_pipeline.predict(X_train)
+
+clf_report_train = pd.DataFrame(classification_report(y_train, y_pred_train, output_dict=True))
+
+accuracy_train = accuracy_score(y_train, y_pred_train)
+
+confusion_train = confusion_matrix(y_train, y_pred_train)
+
+print('Train Results')
+print('='*50)
+print(f"Accuracy Score: {accuracy_train * 100:.2f}%")   
+print("_"*50)
+print(f"CLASSIFICATION REPORT:\n{clf_report_train}")
+print("_"*50)
+print(f"Confusion Matrix: \n {confusion_train}\n")
+```
+
+- The model has an Overfitting issue as the accuracy for the train data is 100 % & 84 % for test data
+- Hyperparameter Tuning is required
+
+## Hyperparameter Tuning
+
+
+```{python}
+from sklearn.model_selection import GridSearchCV, StratifiedKFold
+
+rf_param_grid = {
+    "model__n_estimators": [100, 200, 300],    
+    "model__max_depth": [3, 5, 7, None],           
+    "model__min_samples_split": [2, 5, 10],        
+    "model__min_samples_leaf": [1, 2, 4],              "model__max_features": ["sqrt", "log2"]        
+}
+
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+grid_search_rf = GridSearchCV(rf_pipeline, rf_param_grid, cv=cv, verbose=1, n_jobs=1, scoring = 'f1_macro')
+
+grid_search_rf.fit(X_train, y_train)
+
+print(grid_search_rf.best_params_)
+```
+
+### Evaluation
+
+```{python}
+# Creating  best Pipeline with the best params
+
+rf_best_pipeline = Pipeline(steps=[
+    ('preprocessor', preprocessor),
+    ('model', RandomForestClassifier(max_depth=7, max_features='sqrt', min_samples_leaf=2, min_samples_split=5, n_estimators=100, random_state = 42))
+])
+
+rf_best_pipeline.fit(X_train, y_train)
+y_pred = rf_best_pipeline.predict(X_test)
+
+clf_report = pd.DataFrame(classification_report(y_test, y_pred, output_dict=True))
+
+accuracy = accuracy_score(y_test, y_pred)
+
+confusion = confusion_matrix(y_test, y_pred)
+
+print('Test Results')
+print('='*50)
+print(f"Accuracy Score: {accuracy * 100:.2f}%")
+print("_"*50)
+print(f"CLASSIFICATION REPORT:\n{clf_report}")
+print("_"*50)
+print(f"Confusion Matrix: \n {confusion}\n")
+```
+
+#### Train Results
+
+```{python}
+y_pred_train = rf_best_pipeline.predict(X_train)
+
+clf_report_train = pd.DataFrame(classification_report(y_train, y_pred_train, output_dict=True))
+
+accuracy_train = accuracy_score(y_train, y_pred_train)
+
+confusion_train = confusion_matrix(y_train, y_pred_train)
+
+print('Train Results')
+print('='*50)
+print(f"Accuracy Score: {accuracy_train * 100:.2f}%")   
+print("_"*50)
+print(f"CLASSIFICATION REPORT:\n{clf_report_train}")
+print("_"*50)
+print(f"Confusion Matrix: \n {confusion_train}\n")
+``` 
+
+- The gap between train and test has been significantly reduced
+- This indicates that the model is not overfitting
+- The model is performing well on the test data as well as the train data
+
+## Feature Importance plot
+
+```{python}
+from sklearn.inspection import permutation_importance
+
+result = permutation_importance(rf_best_pipeline, X_test, y_test, n_repeats=10, random_state=42, n_jobs= 1)
+
+sorted_idx = result.importances_mean.argsort()
+
+plt.barh(X_test.columns[sorted_idx], result.importances_mean[sorted_idx])
+plt.xlabel("Permutation Importance")
+plt.show()
+```
+
+- Most Important Features: 'cp' (Chest Pain Type) and 'chol' (Cholesterol) are the most critical features, having the largest positive importance scores. This means shuffling their values significantly decreases the model's performance.
+- Least Important Features: Features like 'restecg', 'trestbps', and 'slope' have negligible importance scores. 'thalch' (Maximum Heart Rate) and 'age' have a negative importance, suggesting that these features may be noisy.
+
+## SHAP Plot
+
+```{python}
+import shap
+import numpy as np
+
+explainer = shap.TreeExplainer(rf_best_pipeline.named_steps["model"])
+
+X_test_transformed = rf_best_pipeline.named_steps["preprocessor"].transform(X_test)
+
+feature_names = rf_best_pipeline.named_steps['preprocessor'].get_feature_names_out()
+
+shap_values = explainer.shap_values(X_test_transformed)
+
+# Plot summary (for class 1 = disease)
+shap.summary_plot(shap_values[1], X_test_transformed, feature_names= feature_names)
+
+```
+
+- Most Important Features: cat_cp_asymptomatic (Asymptomatic Chest Pain) and cat_exang_True (Exercise-Induced Angina is True) are the most influential features.
+
+- Risk Factors: High cholesterol (num_chol) and high exercise-induced angina (cat_exang_True) values increase the model's output (pushing the prediction to the right, towards the positive class).
+
+- Low Risk Factors : Asymptomatic chest pain (cat_cp_asymptomatic) decreases the model's output (pushing the prediction to the left). 
+
+- Least Important: Features like cat_restecg_st-t abnormality, cat_restecg_normal, and cat_fbs_False have very little impact on the final prediction.
+
+
+
+
+## Comparing with Gradient Boosting models (XGB)
+
+### XGB Pipeline
+
+
+```{python}
+xgb_pipeline = Pipeline(steps=[
+    ('preprocessor', preprocessor),
+    ('model', XGBClassifier(random_state = 42, use_label_encoder = False))
+])
+
+xgb_pipeline
+```
+
+
+```{python}
+xgb_pipeline.fit(X_train, y_train)
+
+```
+
+#### Evaluating the model
+
+
+```{python}
+y_pred_xgb = xgb_pipeline.predict(X_test)
+
+clf_report_xgb = pd.DataFrame(classification_report(y_test, y_pred, output_dict=True))
+
+accuracy_xgb = accuracy_score(y_test, y_pred_xgb)
+
+confusion_xgb = confusion_matrix(y_test, y_pred_xgb)
+
+print('Test Results')
+print('='*50)
+print(f"Accuracy Score: {accuracy_xgb * 100:.2f}%")
+print("_"*50)    
+print(f"CLASSIFICATION REPORT:\n{clf_report_xgb}")
+print("_"*50)
+print(f"Confusion Matrix: \n {confusion_xgb}\n")
+```
+
+##### Train Results
+
+```{python}
+y_pred_train_xgb = xgb_pipeline.predict(X_train)
+
+clf_report_train_xgb = pd.DataFrame(classification_report(y_train, y_pred_train_xgb, output_dict=True))
+
+accuracy_train_xgb = accuracy_score(y_train, y_pred_train_xgb)
+
+confusion_train_xgb = confusion_matrix(y_train, y_pred_train_xgb)
+
+print('Train Results')
+print('='*50)
+print(f"Accuracy Score: {accuracy_train_xgb * 100:.2f}%")   
+print("_"*50)
+print(f"CLASSIFICATION REPORT:\n{clf_report_train_xgb}")
+print("_"*50)
+print(f"Confusion Matrix: \n {confusion_train_xgb}\n")
+```
+
+
+- The model has an Overfitting issue as the accuracy for the train data is 100 % & 85 % for test data
+- Hyperparameter Tuning is required
+
+### Hyperparameter Tuning
+
+```{python}
+xgb_param_grid = {
+    "model__n_estimators": [100, 200, 300],
+    "model__max_depth": [3, 5, 7],
+    "model__learning_rate": [0.01, 0.1, 0.2],
+    "model__subsample": [0.7, 0.8, 1.0],
+    "model__colsample_bytree": [0.7, 0.8, 1.0]
+}
+
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+grid_search_xgb = GridSearchCV(xgb_pipeline, xgb_param_grid, cv=cv, verbose=1, n_jobs=1)
+
+grid_search_xgb.fit(X_train, y_train)
+
+best_params_xgb = grid_search_xgb.best_params_
+
+print(best_params_xgb)
+```
+
+
+#### Evaluating the model
+
+
+```{python}
+xgb_best_pipeline = Pipeline(steps=[
+    ('preprocessor', preprocessor),
+    ('model', XGBClassifier(learning_rate = 0.1, max_depth = 3, n_estimators = 100, random_state = 42, subsample = 0.7, colsample_bytree = 0.8))
+])
+
+xgb_best_pipeline.fit(X_train, y_train)
+
+y_pred_xgb = xgb_best_pipeline.predict(X_test)
+
+clf_report_xgb = pd.DataFrame(classification_report(y_test, y_pred_xgb, output_dict=True))
+
+accuracy_xgb = accuracy_score(y_test, y_pred_xgb)
+
+confusion_xgb = confusion_matrix(y_test, y_pred_xgb)
+
+print('Test Results')
+print('='*50)
+print(f"Accuracy Score: {accuracy_xgb * 100:.2f}%")
+print("_"*50)    
+print(f"CLASSIFICATION REPORT:\n{clf_report_xgb}")
+print("_"*50)
+print(f"Confusion Matrix: \n {confusion_xgb}\n")
+```
+
+###### Train Results
+
+```{python}
+y_pred_train_xgb = xgb_best_pipeline.predict(X_train)
+
+clf_report_train_xgb = pd.DataFrame(classification_report(y_train, y_pred_train_xgb, output_dict=True))
+
+accuracy_train_xgb = accuracy_score(y_train, y_pred_train_xgb)
+
+confusion_train_xgb = confusion_matrix(y_train, y_pred_train_xgb)
+
+print('Train Results')   
+print('='*50)
+print(f"Accuracy Score: {accuracy_train_xgb * 100:.2f}%")   
+print("_"*50)
+print(f"CLASSIFICATION REPORT:\n{clf_report_train_xgb}")
+print("_"*50)
+print(f"Confusion Matrix: \n {confusion_train_xgb}\n")
+
+```
+
+- The gap between train and test has been significantly reduced
+- This indicates that the model is not overfitting
+- The model is performing well on the test data as well as the train data
+
+#### Feature Importance plot
+
+```{python}
+from sklearn.inspection import permutation_importance
+
+result = permutation_importance(xgb_best_pipeline, X_test, y_test, n_repeats=10, random_state=42, n_jobs= 1)
+
+sorted_idx = result.importances_mean.argsort()
+
+plt.barh(X_test.columns[sorted_idx], result.importances_mean[sorted_idx])
+plt.xlabel("Permutation Importance")
+plt.show()
+```
